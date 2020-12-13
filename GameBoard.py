@@ -1,129 +1,151 @@
 """
 文件名：    GameBoard.py
-功  能：    游戏主界面类定义。
-修改人：    杨彦军,尹鸿伟
-修改日期：  2020.11.1
-修改内容：  添加游戏GUI界面。
+功  能：    游戏数据层定义。GameBoard/Player模块。
+修改人：    杨彦军
+修改日期：  2020年11月29日
+修改内容：  将数据交流拆分到网络层，将GUI拆分到界面层。
 """
-import matplotlib.pyplot as plt
-from tkinter import *
-from Player import Player
+from threading import Thread
+
+import Network
+
+SERVER_DEFAULT_PORT = 8721
 
 
 class GameBoard:
-    def __init__(self):
-        self.playerNum = self.get_player_number()  # 玩家数量
-        if 0 == self.playerNum:
-            return
-        self.players = []  # 存储实例化的玩家
-        self.g_nums = []  # 存储每轮的G_num
-        self.player_scores = {}  # int: [score, last_input] type， 存储玩家分数和最后一轮输入
-        self.player_inputs = []  # [[], []] type， 存储玩家每轮输入
-        for player_id in range(self.playerNum):  # 实例化玩家
-            self.players.append(Player(player_id))
-            self.player_scores[player_id] = [0, 0]
-        self.start_round()
+    def __init__(self, player_number: int):
+        self._PLAYER_NUMBER = player_number  # 玩家数量
+        self.server = Network.Server(self._PLAYER_NUMBER)
+        self._server_started = False
+        self._server_addr = None
 
-    def start_round(self):
+        self.g_nums = []  # 存储每轮的G_num
+        self.player_scores_all = [[0 for _ in range(player_number)]]  # [round][player_id]二维数组，存储玩家分数
+        self.player_inputs_all = []  # [round][player_id]二维数组，存储玩家每轮输入
+
+    def get_server_address(self):
+        if not self._server_started:
+            self._server_addr = self.server.listen(SERVER_DEFAULT_PORT)  # (ip, port)
+            self._server_started = True
+        return self._server_addr
+
+    def start(self):
+        if not self._server_started:
+            self.get_server_address()
+        T_server = Thread(target=self._start)
+        T_server.setDaemon(True)
+        T_server.start()
+
+    def _start(self):
         while True:
-            self.get_player_input()
-            keep_play = self.get_result()
-            if 'n' == keep_play:
+            # 获取输入
+            inputs = self._get_player_input()
+            # 计算G值
+            g_value = self._calculate_g(inputs)
+            # 计算成绩
+            scores = self._calculate_scores(inputs)
+            # 是否继续游戏
+            play_again = self._get_play_again_choice()
+            # 发送结果
+            self.server.send_result(g_value, scores, play_again)
+            if not play_again:
+                self.game_exit()
                 break
 
-    def get_player_input(self):
-        inputs = []
-        for player in self.players:
-            player_input = player.get_player_input()
-            self.player_scores[player.get_id()][1] = player_input  # 缓存玩家最后一轮输入
-            inputs.append(player_input)
-        # 计算G_num
+    def game_exit(self):
+        import time
+        time.sleep(5)
+        self.server.server_exit()
+        # todo: 保存self.g_nums self.player_scores_all self.player_inputs_all
+
+    def _get_player_input(self) -> list:
+        inputs = self.server.get_player_inputs()
+        self.player_inputs_all.append(inputs)
+        return inputs
+
+    def _calculate_g(self, inputs: list) -> float:
         g = sum(inputs) / len(inputs) * 0.618
         self.g_nums.append(g)
-        self.player_inputs.append(inputs)
+        return g
 
-    def get_result(self):
-        temp_dic = {}
+    def _calculate_scores(self, inputs: list) -> list:
         # 计算绝对值阶段
-        for player_id, player_input in self.player_scores.items():
-            temp_dic[player_id] = abs(player_input[-1] - self.g_nums[-1])  # 用户输入与G值的绝对值
-        temp_dic = sorted(temp_dic.items(), key=lambda x: x[1], reverse=False)  # 升序排序，返回的temp_dic [(id,abs),...] type
+        t_inputs = dict(zip(range(self._PLAYER_NUMBER), inputs))
+        g_value = self.g_nums[-1]
+        for id_, input_ in t_inputs.items():
+            t_inputs[id_] = abs(input_ - g_value)  # 用户输入与G值的绝对值
+        t_inputs = sorted(t_inputs.items(), key=lambda x: x[1], reverse=False)  # 升序排序，返回[(id,abs),]
         # 计分阶段
-        player_id, player_abs = temp_dic[0]
-        for player in temp_dic:  # player (id,abs) type， 遍历查找是否有相同绝对值
-            if player_abs != player[1]:
+        t_scores = dict(zip(range(self._PLAYER_NUMBER), self.player_scores_all[-1]))
+        id_, input_ = t_inputs[0]  # 这里的input_其实是绝对值
+        for player in t_inputs:  # player (id,abs)， 遍历查找是否有相同绝对值
+            if input_ != player[1]:
                 break
-            self.player_scores[player[0]][0] += self.playerNum  # 加N分
-
-        player_id, player_abs = temp_dic[-1]
-        for player in temp_dic[::-1]:  # 逆序列表来找绝对值最大的
-            if player_abs != player[1]:
+            t_scores[player[0]] += self._PLAYER_NUMBER  # 加N分
+        id_, input_ = t_inputs[-1]
+        for player in t_inputs[::-1]:  # 逆序找绝对值最大的
+            if input_ != player[1]:
                 break
-            self.player_scores[player[0]][0] += -2  # 加-2分
-        # matplotlib展示阶段
-        result_window = Tk()
-        result_window.title('本轮结束')
-        Label(result_window, text='---Score Table---\n' +
-                                  ''.join(f'玩家 {player_id} 当前分数 {self.player_scores[player_id][0]}\n'
-                                          for player_id in self.player_scores)).grid(row=0, column=0)
-        # todo: MATPLOTLIB FIGURE
-        fig = plt.figure(figsize=(4, 4), tight_layout=True)
-        plt.xlabel('Game Round')
-        plt.ylabel('Number')
-        plt.plot(self.g_nums, label='G-num', marker='o', ls=':')
-        plt.plot(self.player_inputs, marker='x', ls='')
-        plt.legend()
-        plt.grid()
-        # plt.savefig('temp.png')
-        # Label(result_window, image=PhotoImage(file='temp.png')).grid(row=0, column=1)
-        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-        canvas = FigureCanvasTkAgg(fig, master=result_window)
-        canvas.draw()
-        canvas.get_tk_widget().grid(row=0, column=1)
-        plt.close()
-        choice = StringVar()
-        choice.set('n')
+            t_scores[player[0]] += -2  # 加-2分
+        # append
+        t_scores = list(t_scores.values())  # dict转list
+        self.player_scores_all.append(t_scores)
+        return t_scores
 
-        def get_entry(c):
-            choice.set(c)
-            result_window.destroy()
-            return
-
-        Button(result_window, text='再玩一轮', command=lambda: get_entry('y')).grid(row=2, column=0, sticky=E)
-        Button(result_window, text='结束游戏', command=lambda: get_entry('n')).grid(row=2, column=1, sticky=W)
-        mainloop()
-        return choice.get()
-
-    def get_player_number(self):
-        input_window = Tk()
-        input_window.title('玩家数量')
-        Label(input_window, text='本次游戏共有多少名玩家：').grid(row=0, column=0)
-        num = StringVar()
-        num.set('0')
-        entry = Entry(input_window, width=8, textvariable=num)
-        entry.grid(row=0, column=1)
-        error_msg = StringVar('')
-        Label(input_window, textvariable=error_msg).grid(row=1, column=0, columnspan=2)
-
-        def get_entry():
-            try:
-                if 0 < int(num.get()):
-                    input_window.destroy()
-                    return
-            except ValueError:
-                pass
-            error_msg.set('-非法输入，请重新输入-')
-
-        Button(input_window, text='确认', command=get_entry).grid(row=2, column=0, columnspan=2)
-        mainloop()
-        return int(num.get())
+    @staticmethod
+    def _get_play_again_choice() -> bool:
+        from tkinter import messagebox
+        choice = messagebox.askyesno(title='继续游戏？', message='您是房主，请决定是否继续游戏。')
+        return choice
 
 
-# while True:
-#     try:
-#         playerNum = int(input('本次游戏共有多少名玩家：'))
-#         break
-#     except:
-#         print('---Invalid input---')
-# game = GameBoard(playerNum)
-game = GameBoard()
+class Player:
+    def __init__(self):
+        self.player_id = None  # int
+        self.client = Network.Client()  # 客户端
+
+        self.g_nums = []  # 存储每轮的G_num
+        self.player_scores_all = []  # [round][player_id]二维数组，存储玩家分数
+        self.player_inputs_all = []  # [round][player_id]二维数组，存储玩家每轮输入
+        self.play_again = True
+
+    def connect(self, server_ip: str, server_port: int):
+        self.client.connect(server_ip, server_port)
+
+    def send_input(self, value: float):
+        self.client.send_input(value)
+
+    def get_player_id(self):
+        if self.player_id is None:
+            self.player_id = self.client.get_player_id()
+        return self.player_id
+
+    def get_round_result(self):
+        """
+        g_value = -1表示出现了异常
+        """
+        player_inputs, g_value, scores, play_again = self.client.get_round_result()
+        self.player_inputs_all.append(player_inputs)
+        self.g_nums.append(g_value)
+        self.player_scores_all.append(scores)
+        self.play_again = play_again
+
+    def get_last_score(self):
+        return self.player_scores_all[-1]
+
+    def get_input(self):
+        return self.player_inputs_all
+
+    def get_g(self):
+        return self.g_nums
+
+    def is_play_again(self):
+        return self.play_again
+
+
+if __name__ == '__main__':
+    import time
+    while True:
+        print('不能从这里运行。')
+        time.sleep(1)
+
