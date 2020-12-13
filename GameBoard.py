@@ -1,22 +1,24 @@
 """
 文件名：    GameBoard.py
 功  能：    游戏主界面类定义。
-修改人：    杨彦军
-修改日期：  2020.10.26
-修改内容：  程序初始原型。
+修改人：    杨彦军,尹鸿伟
+修改日期：  2020.11.1
+修改内容：  添加游戏GUI界面。
 """
-import os
 import matplotlib.pyplot as plt
+from tkinter import *
 from Player import Player
 
 
 class GameBoard:
-    def __init__(self, playerNum):
-        self.playerNum = playerNum  # 玩家数量
-        self.players = []           # 存储实例化的玩家
-        self.g_nums = []            # 存储每轮的G_num
-        self.player_scores = {}     # int: [score, last_input] type， 存储玩家分数和最后一轮输入
-        self.player_inputs = []     # [[], []] type， 存储玩家每轮输入
+    def __init__(self):
+        self.playerNum = self.get_player_number()  # 玩家数量
+        if 0 == self.playerNum:
+            return
+        self.players = []  # 存储实例化的玩家
+        self.g_nums = []  # 存储每轮的G_num
+        self.player_scores = {}  # int: [score, last_input] type， 存储玩家分数和最后一轮输入
+        self.player_inputs = []  # [[], []] type， 存储玩家每轮输入
         for player_id in range(self.playerNum):  # 实例化玩家
             self.players.append(Player(player_id))
             self.player_scores[player_id] = [0, 0]
@@ -25,15 +27,15 @@ class GameBoard:
     def start_round(self):
         while True:
             self.get_player_input()
-            self.get_result()
-            if 'n' == input('是否继续游戏（y/n）：'):
+            keep_play = self.get_result()
+            if 'n' == keep_play:
                 break
 
     def get_player_input(self):
         inputs = []
         for player in self.players:
             player_input = player.get_player_input()
-            self.player_scores[player.get_id()][1] = player_input    # 缓存玩家最后一轮输入
+            self.player_scores[player.get_id()][1] = player_input  # 缓存玩家最后一轮输入
             inputs.append(player_input)
         # 计算G_num
         g = sum(inputs) / len(inputs) * 0.618
@@ -59,30 +61,69 @@ class GameBoard:
                 break
             self.player_scores[player[0]][0] += -2  # 加-2分
         # matplotlib展示阶段
-        os.system("cls")
-        print('\b', end='')
-        # 显示分数表
-        print('---Score Table---')
-        for player_id in self.player_scores:
-            print('玩家 {} 当前分数 {}'.format(player_id, self.player_scores[player_id][0]))
-        # 显示matplotlib图表
-        # TODO: 完善matplotlib展示
-        plt.figure()
+        result_window = Tk()
+        result_window.title('本轮结束')
+        Label(result_window, text='---Score Table---\n' +
+                                  ''.join(f'玩家 {player_id} 当前分数 {self.player_scores[player_id][0]}\n'
+                                          for player_id in self.player_scores)).grid(row=0, column=0)
+        # todo: MATPLOTLIB FIGURE
+        fig = plt.figure(figsize=(4, 4), tight_layout=True)
         plt.xlabel('Game Round')
         plt.ylabel('Number')
         plt.plot(self.g_nums, label='G-num', marker='o', ls=':')
         plt.plot(self.player_inputs, marker='x', ls='')
         plt.legend()
         plt.grid()
-        plt.show()
+        # plt.savefig('temp.png')
+        # Label(result_window, image=PhotoImage(file='temp.png')).grid(row=0, column=1)
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        canvas = FigureCanvasTkAgg(fig, master=result_window)
+        canvas.draw()
+        canvas.get_tk_widget().grid(row=0, column=1)
+        plt.close()
+        choice = StringVar()
+        choice.set('n')
 
-        pass
+        def get_entry(c):
+            choice.set(c)
+            result_window.destroy()
+            return
+
+        Button(result_window, text='再玩一轮', command=lambda: get_entry('y')).grid(row=2, column=0, sticky=E)
+        Button(result_window, text='结束游戏', command=lambda: get_entry('n')).grid(row=2, column=1, sticky=W)
+        mainloop()
+        return choice.get()
+
+    def get_player_number(self):
+        input_window = Tk()
+        input_window.title('玩家数量')
+        Label(input_window, text='本次游戏共有多少名玩家：').grid(row=0, column=0)
+        num = StringVar()
+        num.set('0')
+        entry = Entry(input_window, width=8, textvariable=num)
+        entry.grid(row=0, column=1)
+        error_msg = StringVar('')
+        Label(input_window, textvariable=error_msg).grid(row=1, column=0, columnspan=2)
+
+        def get_entry():
+            try:
+                if 0 < int(num.get()):
+                    input_window.destroy()
+                    return
+            except ValueError:
+                pass
+            error_msg.set('-非法输入，请重新输入-')
+
+        Button(input_window, text='确认', command=get_entry).grid(row=2, column=0, columnspan=2)
+        mainloop()
+        return int(num.get())
 
 
-while True:
-    try:
-        playerNum = int(input('本次游戏共有多少名玩家：'))
-        break
-    except:
-        print('---Invalid input---')
-game = GameBoard(playerNum)
+# while True:
+#     try:
+#         playerNum = int(input('本次游戏共有多少名玩家：'))
+#         break
+#     except:
+#         print('---Invalid input---')
+# game = GameBoard(playerNum)
+game = GameBoard()
